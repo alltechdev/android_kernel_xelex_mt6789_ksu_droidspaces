@@ -1,0 +1,84 @@
+name: Build Kernel
+
+on:
+  push:
+    branches: [lineage-23.2]
+    tags: ['v*']
+  workflow_dispatch:
+
+env:
+  CLANG_VERSION: r416183b
+  ARCH: arm64
+  DEFCONFIG: gki_defconfig
+  FRAGMENTS: mgk.config entry_level.config q20_v12_factory.config
+
+jobs:
+  build:
+    name: Q25 Kernel (KSU + Droidspaces)
+    runs-on: ubuntu-22.04
+
+    steps:
+      - name: Checkout source
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+          fetch-depth: 1
+
+      - name: Install dependencies
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y \
+            bc bison build-essential flex \
+            libdw-dev libelf-dev libssl-dev \
+            lz4 python3 rsync zip
+
+      - name: Cache clang toolchain
+        id: clang-cache
+        uses: actions/cache@v4
+        with:
+          path: clang-${{ env.CLANG_VERSION }}
+          key: clang-${{ env.CLANG_VERSION }}-linux-x86_64
+
+      - name: Download clang toolchain
+        if: steps.clang-cache.outputs.cache-hit != 'true'
+        run: |
+          mkdir -p clang-${{ env.CLANG_VERSION }}
+          curl -fL \
+            "https://android.googlesource.com/platform/prebuilts/clang/host/linux-x86/+archive/refs/heads/android12-release/clang-${{ env.CLANG_VERSION }}.tar.gz" \
+            | tar -xz -C clang-${{ env.CLANG_VERSION }}
+
+      - name: Generate kernel config
+        run: |
+          export PATH=$PWD/clang-${{ env.CLANG_VERSION }}/bin:$PATH
+          make O=out ARCH=${{ env.ARCH }} LLVM=1 LLVM_IAS=1 \
+            ${{ env.DEFCONFIG }} ${{ env.FRAGMENTS }}
+
+      - name: Build kernel
+        run: |
+          export PATH=$PWD/clang-${{ env.CLANG_VERSION }}/bin:$PATH
+          make O=out ARCH=${{ env.ARCH }} LLVM=1 LLVM_IAS=1 \
+            -j$(nproc) Image.gz dtbs modules
+
+      - name: Repack boot.img
+        run: python3 tools/repack_boot.py
+
+      - name: Rename artifact with version
+        run: |
+          SHA=$(git rev-parse --short HEAD)
+          cp out/boot.img out/boot-Q25-KSU-${SHA}.img
+          echo "ARTIFACT=out/boot-Q25-KSU-${SHA}.img" >> $GITHUB_ENV
+          echo "SHA=${SHA}" >> $GITHUB_ENV
+
+      - name: Upload boot.img artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: boot-Q25-KSU-${{ env.SHA }}
+          path: ${{ env.ARTIFACT }}
+          retention-days: 30
+
+      - name: Create GitHub Release
+        if: startsWith(github.ref, 'refs/tags/')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: ${{ env.ARTIFACT }}
+          generate_release_notes: true
