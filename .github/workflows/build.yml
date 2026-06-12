@@ -53,11 +53,18 @@ jobs:
           make O=out ARCH=${{ env.ARCH }} LLVM=1 LLVM_IAS=1 \
             ${{ env.DEFCONFIG }} ${{ env.FRAGMENTS }}
 
+      - name: Setup swap space
+        run: |
+          sudo fallocate -l 10G /swapfile
+          sudo chmod 600 /swapfile
+          sudo mkswap /swapfile
+          sudo swapon /swapfile
+
       - name: Build kernel
         run: |
           export PATH=$PWD/clang-${{ env.CLANG_VERSION }}/bin:$PATH
           make O=out ARCH=${{ env.ARCH }} LLVM=1 LLVM_IAS=1 \
-            -j$(nproc) Image.gz dtbs modules
+            -j$(nproc) Image.gz dtbs
 
       - name: Repack boot.img
         run: python3 tools/repack_boot.py
